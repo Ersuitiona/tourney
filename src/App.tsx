@@ -284,7 +284,12 @@ export default function App() {
             </motion.div>
           )}
 
-          {view === 'hallOfFame' && <HallOfFameView hallOfFame={hallOfFame} />}
+          {view === 'hallOfFame' && (
+            <HallOfFameView 
+              hallOfFame={hallOfFame} 
+              onAdd={(entry: any) => setHallOfFame([entry, ...hallOfFame])} 
+            />
+          )}
 
           {view === 'arena' && (
             !tournamentName ? (
@@ -1168,17 +1173,99 @@ function BracketTab({ bracketMatches, setBracketMatches, generateBracket, clubs 
   );
 }
 
-function HallOfFameView({ hallOfFame }: any) {
+function HallOfFameView({ hallOfFame, onAdd }: any) {
+  const [showAdd, setShowAdd] = useState(false);
+  const [season, setSeason] = useState('');
+  const [winner, setWinner] = useState('');
+  const [runnerUp, setRunnerUp] = useState('');
+
+  const handleSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (season && winner && runnerUp) {
+      onAdd({ id: generateId(), season, winner, runnerUp });
+      setSeason('');
+      setWinner('');
+      setRunnerUp('');
+      setShowAdd(false);
+    }
+  };
+
   return (
     <motion.div 
       initial={{ opacity: 0, scale: 0.98 }}
       animate={{ opacity: 1, scale: 1 }}
       className="space-y-8"
     >
-      <div className="text-center mb-12">
-        <h2 className="text-4xl font-display font-black text-white uppercase italic tracking-tighter mb-2">Hall of Fame</h2>
-        <p className="text-slate-500 font-medium">History of champions and legends</p>
+      <div className="flex flex-col md:flex-row justify-between items-center gap-6 mb-12 bg-slate-900/50 p-8 rounded-[2.5rem] border border-slate-800 shadow-2xl">
+        <div className="text-center md:text-left">
+          <h2 className="text-4xl font-display font-black text-white uppercase italic tracking-tighter mb-2">Hall of Fame</h2>
+          <p className="text-slate-500 font-medium">History of champions and legends</p>
+        </div>
+        <button 
+          onClick={() => setShowAdd(!showAdd)}
+          className={`px-6 py-3 rounded-xl font-bold flex items-center gap-2 transition-all ${showAdd ? 'bg-slate-800 text-slate-300' : 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30 hover:bg-indigo-500'}`}
+        >
+          {showAdd ? <X className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+          {showAdd ? 'Cancel' : 'Add Record'}
+        </button>
       </div>
+
+      <AnimatePresence>
+        {showAdd && (
+          <motion.div 
+            initial={{ opacity: 0, height: 0 }}
+            animate={{ opacity: 1, height: 'auto' }}
+            exit={{ opacity: 0, height: 0 }}
+            className="overflow-hidden mb-12"
+          >
+            <div className="bg-slate-900 border border-indigo-500/30 p-8 rounded-[2.5rem] shadow-2xl">
+              <form onSubmit={handleSubmit} className="grid grid-cols-1 md:grid-cols-3 gap-6">
+                <div>
+                  <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">Season Name</label>
+                  <input 
+                    required
+                    type="text" 
+                    placeholder="e.g. 2025 Winter"
+                    value={season}
+                    onChange={e => setSeason(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-white font-bold focus:border-indigo-600 transition-colors"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">Winner Team</label>
+                  <input 
+                    required
+                    type="text" 
+                    placeholder="Club Name"
+                    value={winner}
+                    onChange={e => setWinner(e.target.value)}
+                    className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-white font-bold focus:border-indigo-600 transition-colors"
+                  />
+                </div>
+                <div>
+                  <label className="block text-[10px] font-black text-slate-500 uppercase tracking-widest mb-2">Runner-up Team</label>
+                  <div className="flex gap-3">
+                    <input 
+                      required
+                      type="text" 
+                      placeholder="Club Name"
+                      value={runnerUp}
+                      onChange={e => setRunnerUp(e.target.value)}
+                      className="flex-1 bg-slate-950 border border-slate-800 rounded-xl px-4 py-3 text-white font-bold focus:border-indigo-600 transition-colors"
+                    />
+                    <button 
+                      type="submit"
+                      className="bg-indigo-600 hover:bg-indigo-500 text-white p-3 rounded-xl shadow-lg transition-all"
+                    >
+                      <Check className="w-6 h-6" />
+                    </button>
+                  </div>
+                </div>
+              </form>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {hallOfFame.map((h: any, idx: number) => (
