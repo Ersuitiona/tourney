@@ -213,6 +213,14 @@ export default function App() {
     setBracketMatches(qs);
   };
 
+  const deleteFromHallOfFame = (id: string) => {
+    setHallOfFame(hallOfFame.filter((h: any) => h.id !== id));
+  };
+
+  const updateHallOfFame = (updatedEntry: any) => {
+    setHallOfFame(hallOfFame.map((h: any) => h.id === updatedEntry.id ? updatedEntry : h));
+  };
+
   return (
     <div className="min-h-screen bg-slate-950 font-sans selection:bg-indigo-500/30">
       {/* Navigation */}
@@ -288,6 +296,8 @@ export default function App() {
             <HallOfFameView 
               hallOfFame={hallOfFame} 
               onAdd={(entry: any) => setHallOfFame([entry, ...hallOfFame])} 
+              onDelete={deleteFromHallOfFame}
+              onUpdate={updateHallOfFame}
             />
           )}
 
@@ -319,10 +329,10 @@ export default function App() {
                   <div className="flex gap-3 w-full lg:w-auto">
                     <button 
                       onClick={handleReset}
-                      className="flex-1 lg:flex-none flex items-center justify-center gap-2 px-6 py-3 bg-red-500/10 hover:bg-red-500/20 text-red-400 rounded-xl font-bold transition-all border border-red-500/20 text-sm"
+                      className="flex-1 lg:flex-none flex items-center justify-center gap-2 px-6 py-3 bg-red-500/10 hover:bg-red-500/20 text-red-500 rounded-xl font-bold transition-all border border-red-500/20 text-sm"
                     >
                       <Trash2 className="w-4 h-4" />
-                      Reset Everything
+                      Delete Tournament
                     </button>
                   </div>
                 </div>
@@ -1173,11 +1183,17 @@ function BracketTab({ bracketMatches, setBracketMatches, generateBracket, clubs 
   );
 }
 
-function HallOfFameView({ hallOfFame, onAdd }: any) {
+function HallOfFameView({ hallOfFame, onAdd, onDelete, onUpdate }: any) {
   const [showAdd, setShowAdd] = useState(false);
+  const [editingId, setEditingId] = useState<string | null>(null);
+  
   const [season, setSeason] = useState('');
   const [winner, setWinner] = useState('');
   const [runnerUp, setRunnerUp] = useState('');
+
+  const [editSeason, setEditSeason] = useState('');
+  const [editWinner, setEditWinner] = useState('');
+  const [editRunnerUp, setEditRunnerUp] = useState('');
 
   const handleSubmit = (e: React.FormEvent) => {
     e.preventDefault();
@@ -1187,6 +1203,25 @@ function HallOfFameView({ hallOfFame, onAdd }: any) {
       setWinner('');
       setRunnerUp('');
       setShowAdd(false);
+    }
+  };
+
+  const startEditing = (h: any) => {
+    setEditingId(h.id);
+    setEditSeason(h.season);
+    setEditWinner(h.winner);
+    setEditRunnerUp(h.runnerUp);
+  };
+
+  const cancelEditing = () => {
+    setEditingId(null);
+  };
+
+  const handleUpdate = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (editSeason && editWinner && editRunnerUp) {
+      onUpdate({ id: editingId, season: editSeason, winner: editWinner, runnerUp: editRunnerUp });
+      setEditingId(null);
     }
   };
 
@@ -1280,21 +1315,67 @@ function HallOfFameView({ hallOfFame, onAdd }: any) {
                <Trophy className="w-32 h-32 text-indigo-400" />
             </div>
             <div className="relative z-10">
-              <span className="inline-block bg-slate-950 text-indigo-400 font-black text-[10px] px-3 py-1 rounded-lg uppercase tracking-widest mb-4">
-                 Season {h.season}
-              </span>
-              <div className="space-y-4">
-                <div>
-                   <p className="text-xs font-black text-slate-500 uppercase tracking-widest mb-1">Champions</p>
-                   <h3 className="text-2xl font-display font-black text-white uppercase tracking-tight">{h.winner}</h3>
-                </div>
-                <div className="flex items-center gap-2">
-                   <div className="w-8 h-8 rounded-full bg-slate-950 flex items-center justify-center border border-slate-800">
-                      <Medal className="w-4 h-4 text-slate-500" />
-                   </div>
-                   <p className="text-slate-400 font-bold text-sm">Runner-up: <span className="text-white">{h.runnerUp}</span></p>
+              <div className="flex justify-between items-start mb-4">
+                <span className="inline-block bg-slate-950 text-indigo-400 font-black text-[10px] px-3 py-1 rounded-lg uppercase tracking-widest">
+                   Season {h.season}
+                </span>
+                <div className="flex gap-1 lg:opacity-0 group-hover:opacity-100 transition-opacity">
+                  <button 
+                    onClick={() => startEditing(h)}
+                    className="p-2 text-slate-500 hover:text-indigo-400 hover:bg-indigo-500/10 rounded-lg transition-all"
+                  >
+                    <Edit2 className="w-4 h-4" />
+                  </button>
+                  <button 
+                    onClick={() => onDelete(h.id)}
+                    className="p-2 text-slate-500 hover:text-red-400 hover:bg-red-500/10 rounded-lg transition-all"
+                  >
+                    <Trash2 className="w-4 h-4" />
+                  </button>
                 </div>
               </div>
+
+              {editingId === h.id ? (
+                <form onSubmit={handleUpdate} className="space-y-4 pt-2">
+                   <div className="space-y-3">
+                      <input 
+                        value={editSeason} 
+                        onChange={e => setEditSeason(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-white font-bold text-sm"
+                        placeholder="Season"
+                      />
+                      <input 
+                        value={editWinner} 
+                        onChange={e => setEditWinner(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-white font-bold text-sm"
+                        placeholder="Winner"
+                      />
+                      <input 
+                        value={editRunnerUp} 
+                        onChange={e => setEditRunnerUp(e.target.value)}
+                        className="w-full bg-slate-950 border border-slate-800 rounded-xl px-4 py-2 text-white font-bold text-sm"
+                        placeholder="Runner-up"
+                      />
+                   </div>
+                   <div className="flex gap-2 justify-end">
+                      <button type="button" onClick={cancelEditing} className="px-4 py-2 text-slate-400 hover:text-white transition-colors text-xs font-bold uppercase">Cancel</button>
+                      <button type="submit" className="px-4 py-2 bg-indigo-600 text-white rounded-lg text-xs font-bold uppercase hover:bg-indigo-500">Save</button>
+                   </div>
+                </form>
+              ) : (
+                <div className="space-y-4">
+                  <div>
+                     <p className="text-xs font-black text-slate-500 uppercase tracking-widest mb-1">Champions</p>
+                     <h3 className="text-2xl font-display font-black text-white uppercase tracking-tight">{h.winner}</h3>
+                  </div>
+                  <div className="flex items-center gap-2">
+                     <div className="w-8 h-8 rounded-full bg-slate-950 flex items-center justify-center border border-slate-800">
+                        <Medal className="w-4 h-4 text-slate-500" />
+                     </div>
+                     <p className="text-slate-400 font-bold text-sm">Runner-up: <span className="text-white">{h.runnerUp}</span></p>
+                  </div>
+                </div>
+              )}
             </div>
           </motion.div>
         ))}
