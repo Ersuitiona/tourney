@@ -1,0 +1,6 @@
+{
+  "name": "TourneyPremium",
+  "description": "Professional football tournament organizer with automatic group fixtures, dynamic standings, and playoff bracket generation.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
