@@ -28,9 +28,20 @@ const INITIAL_GROUPS = [
  * Main Tournament Organizer Component
  */
 export default function App() {
-  const [view, setView] = useState<'home' | 'arena' | 'hallOfFame'>('home'); 
-  const [activeTab, setActiveTab] = useState<'clubs' | 'groups' | 'fixtures' | 'standings' | 'bracket'>('clubs');
-  const [tournamentName, setTournamentName] = useState<string | null>(null);
+  const [view, setView] = useState<'home' | 'arena' | 'hallOfFame'>(() => {
+    const saved = localStorage.getItem('tournament_view');
+    if (saved) return saved as any;
+    const savedName = localStorage.getItem('tournament_name');
+    if (savedName) return 'arena';
+    return 'home';
+  }); 
+  const [activeTab, setActiveTab] = useState<'clubs' | 'groups' | 'fixtures' | 'standings' | 'bracket'>(() => {
+    const saved = localStorage.getItem('tournament_activeTab');
+    return (saved as any) || 'clubs';
+  });
+  const [tournamentName, setTournamentName] = useState<string | null>(() => {
+    return localStorage.getItem('tournament_name') || null;
+  });
 
   // Scheduling & UI State
   const [schedulingMode, setSchedulingMode] = useState<'algorithmic' | 'ai'>('algorithmic');
@@ -43,14 +54,66 @@ export default function App() {
   const [showExportModal, setShowExportModal] = useState(false);
 
   // Data State
-  const [clubs, setClubs] = useState<{id: string, name: string, logo?: string}[]>([]);
-  const [groups, setGroups] = useState<any[]>(INITIAL_GROUPS);
-  const [fixtures, setFixtures] = useState<any[]>([]); // Array of matchdays: { id: string, label: string, matches: any[] }
-  const [bracketMatches, setBracketMatches] = useState<any[]>([]);
-  const [hallOfFame, setHallOfFame] = useState([
-    { id: '1', season: '2023', winner: 'Real Madrid', runnerUp: 'Dortmund' },
-    { id: '2', season: '2024 (Summer)', winner: 'Man City', runnerUp: 'Inter' }
-  ]);
+  const [clubs, setClubs] = useState<{id: string, name: string, logo?: string}[]>(() => {
+    const saved = localStorage.getItem('tournament_clubs');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [groups, setGroups] = useState<any[]>(() => {
+    const saved = localStorage.getItem('tournament_groups');
+    return saved ? JSON.parse(saved) : INITIAL_GROUPS;
+  });
+  const [fixtures, setFixtures] = useState<any[]>(() => {
+    const saved = localStorage.getItem('tournament_fixtures');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [bracketMatches, setBracketMatches] = useState<any[]>(() => {
+    const saved = localStorage.getItem('tournament_bracketMatches');
+    return saved ? JSON.parse(saved) : [];
+  });
+  const [hallOfFame, setHallOfFame] = useState(() => {
+    const saved = localStorage.getItem('tournament_hallOfFame');
+    return saved ? JSON.parse(saved) : [
+      { id: '1', season: '2023', winner: 'Real Madrid', runnerUp: 'Dortmund' },
+      { id: '2', season: '2024 (Summer)', winner: 'Man City', runnerUp: 'Inter' }
+    ];
+  });
+
+  // Sync state to local storage automatically
+  useEffect(() => {
+    localStorage.setItem('tournament_view', view);
+  }, [view]);
+
+  useEffect(() => {
+    localStorage.setItem('tournament_activeTab', activeTab);
+  }, [activeTab]);
+
+  useEffect(() => {
+    if (tournamentName) {
+      localStorage.setItem('tournament_name', tournamentName);
+    } else {
+      localStorage.removeItem('tournament_name');
+    }
+  }, [tournamentName]);
+
+  useEffect(() => {
+    localStorage.setItem('tournament_clubs', JSON.stringify(clubs));
+  }, [clubs]);
+
+  useEffect(() => {
+    localStorage.setItem('tournament_groups', JSON.stringify(groups));
+  }, [groups]);
+
+  useEffect(() => {
+    localStorage.setItem('tournament_fixtures', JSON.stringify(fixtures));
+  }, [fixtures]);
+
+  useEffect(() => {
+    localStorage.setItem('tournament_bracketMatches', JSON.stringify(bracketMatches));
+  }, [bracketMatches]);
+
+  useEffect(() => {
+    localStorage.setItem('tournament_hallOfFame', JSON.stringify(hallOfFame));
+  }, [hallOfFame]);
 
   // Derived State: Calculate Standings
   const groupStandings = useMemo(() => {
@@ -115,6 +178,14 @@ export default function App() {
   };
 
   const handleReset = () => {
+    localStorage.removeItem('tournament_name');
+    localStorage.removeItem('tournament_clubs');
+    localStorage.removeItem('tournament_groups');
+    localStorage.removeItem('tournament_fixtures');
+    localStorage.removeItem('tournament_bracketMatches');
+    localStorage.removeItem('tournament_view');
+    localStorage.removeItem('tournament_activeTab');
+
     setTournamentName(null);
     setClubs([]);
     setGroups(INITIAL_GROUPS);
@@ -1305,9 +1376,14 @@ function StandingsTab({ standings, clubs, groups, tournamentName }: any) {
                    <tr className="border-b border-slate-800 bg-slate-900/50">
                       <th className="p-4 font-black text-slate-600 uppercase">#</th>
                       <th className="p-4 font-black text-slate-600 uppercase min-w-[120px]">Team</th>
-                      <th className="p-4 font-black text-slate-600 uppercase text-center">P</th>
-                      <th className="p-4 font-black text-slate-600 uppercase text-center">GD</th>
-                      <th className="p-4 font-black text-white uppercase text-center">Pts</th>
+                      <th className="p-4 font-black text-slate-600 uppercase text-center" title="Matches Played">MP</th>
+                      <th className="p-4 font-black text-slate-600 uppercase text-center" title="Won">W</th>
+                      <th className="p-4 font-black text-slate-600 uppercase text-center" title="Draw">D</th>
+                      <th className="p-4 font-black text-slate-600 uppercase text-center" title="Lost">L</th>
+                      <th className="p-4 font-black text-slate-600 uppercase text-center" title="Goals For">GF</th>
+                      <th className="p-4 font-black text-slate-600 uppercase text-center" title="Goals Against">GA</th>
+                      <th className="p-4 font-black text-slate-600 uppercase text-center" title="Goal Difference">GD</th>
+                      <th className="p-4 font-black text-white uppercase text-center bg-indigo-500/10">Pts</th>
                    </tr>
                 </thead>
                 <tbody>
@@ -1326,11 +1402,16 @@ function StandingsTab({ standings, clubs, groups, tournamentName }: any) {
                               </div>
                               <span className="font-bold text-slate-200">{club?.name}</span>
                            </td>
-                           <td className="p-4 text-center text-slate-500 font-medium">{row.played}</td>
+                           <td className="p-4 text-center text-slate-400 font-medium">{row.played}</td>
+                           <td className="p-4 text-center text-slate-500 font-medium">{row.won}</td>
+                           <td className="p-4 text-center text-slate-500 font-medium">{row.drawn}</td>
+                           <td className="p-4 text-center text-slate-500 font-medium">{row.lost}</td>
+                           <td className="p-4 text-center text-slate-500 font-medium">{row.gf}</td>
+                           <td className="p-4 text-center text-slate-500 font-medium">{row.ga}</td>
                            <td className={`p-4 text-center font-bold ${row.gd > 0 ? 'text-green-500' : row.gd < 0 ? 'text-red-500' : 'text-slate-500'}`}>
                               {row.gd > 0 ? `+${row.gd}` : row.gd}
                            </td>
-                           <td className="p-4 text-center">
+                           <td className="p-4 text-center bg-indigo-500/[0.03]">
                               <span className="font-black text-white text-base">{row.pts}</span>
                            </td>
                         </tr>
@@ -1338,7 +1419,7 @@ function StandingsTab({ standings, clubs, groups, tournamentName }: any) {
                    })}
                    {(!standings[group.id] || standings[group.id].length === 0) && (
                      <tr>
-                        <td colSpan={5} className="p-10 text-center text-slate-700 font-bold uppercase tracking-widest">No data</td>
+                        <td colSpan={10} className="p-10 text-center text-slate-700 font-bold uppercase tracking-widest">No data</td>
                      </tr>
                    )}
                 </tbody>
