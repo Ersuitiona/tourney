@@ -9,7 +9,8 @@ import {
   ChevronRight, Plus, Upload, Edit2, Check, X, 
   Shuffle, ArrowRightLeft, Swords, Medal, History,
   Download, AlertTriangle, Camera, Trash2, Save,
-  ArrowUpRight, Info, ChevronDown, FileText, Image as ImageIcon
+  ArrowUpRight, Info, ChevronDown, FileText, Image as ImageIcon,
+  Sparkles, Loader2, RefreshCw, Eye
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import html2canvas from 'html2canvas';
@@ -30,6 +31,16 @@ export default function App() {
   const [view, setView] = useState<'home' | 'arena' | 'hallOfFame'>('home'); 
   const [activeTab, setActiveTab] = useState<'clubs' | 'groups' | 'fixtures' | 'standings' | 'bracket'>('clubs');
   const [tournamentName, setTournamentName] = useState<string | null>(null);
+
+  // Scheduling & UI State
+  const [schedulingMode, setSchedulingMode] = useState<'algorithmic' | 'ai'>('algorithmic');
+  const [isGeneratingFixtures, setIsGeneratingFixtures] = useState(false);
+  const [fixtureError, setFixtureError] = useState<string | null>(null);
+
+  // Export Preview Modal State
+  const [exportImgSrc, setExportImgSrc] = useState<string | null>(null);
+  const [exportType, setExportType] = useState<'png' | 'pdf' | null>(null);
+  const [showExportModal, setShowExportModal] = useState(false);
 
   // Data State
   const [clubs, setClubs] = useState<{id: string, name: string, logo?: string}[]>([]);
@@ -113,73 +124,168 @@ export default function App() {
     setView('home');
   };
 
-  const generateFixtures = (options: { within: boolean, between: boolean, rounds: number }) => {
-    const rawMatches: any[] = [];
-    
-    for (let r = 1; r <= options.rounds; r++) {
-      // 1. Matches within groups
-      if (options.within) {
-        groups.forEach(group => {
-          const ids = group.clubIds;
-          if (ids.length < 2) return;
-          for (let i = 0; i < ids.length; i++) {
-            for (let j = i + 1; j < ids.length; j++) {
-              rawMatches.push({
-                id: generateId(),
-                type: 'within',
-                groupId: group.id,
-                homeId: r % 2 === 0 ? ids[j] : ids[i],
-                awayId: r % 2 === 0 ? ids[i] : ids[j],
-                homeScore: 0,
-                awayScore: 0,
-                status: 'scheduled',
-                round: r
-              });
-            }
-          }
-        });
-      }
+  const generateFixtures = async (options: { within: boolean, between: boolean, rounds: number }) => {
+    setIsGeneratingFixtures(true);
+    setFixtureError(null);
 
-      // 2. Matches between groups
-      if (options.between && groups.length > 1) {
-        for (let i = 0; i < groups.length; i++) {
-          for (let j = i + 1; j < groups.length; j++) {
-            const groupA = groups[i];
-            const groupB = groups[j];
-            
-            groupA.clubIds.forEach((c1: string) => {
-              groupB.clubIds.forEach((c2: string) => {
-                rawMatches.push({
+    // If they chose AI mode, let's trigger the backend API
+    if (schedulingMode === 'ai') {
+      try {
+        const response = await fetch("/api/generate-fixtures", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ clubs, groups, options }),
+        });
+
+        if (!response.ok) {
+          const errData = await response.json();
+          throw new Error(errData.error || "Failed to make server-side AI call.");
+        }
+
+        const data = await response.json();
+        if (data.matchdays && data.matchdays.length > 0) {
+          setFixtures(data.matchdays);
+          setActiveTab('fixtures');
+          setIsGeneratingFixtures(false);
+          return;
+        } else {
+          throw new Error("Invalid format returned from AI scheduling.");
+        }
+      } catch (err: any) {
+        console.warn("AI generation failed, falling back to smart mathematical scheduling:", err.message);
+        setFixtureError(`AI generation failed (${err.message}). Automatically fell back to mathematically optimized round-robin.`);
+        // Fall back to algorithmic scheduling below
+      }
+    }
+
+    // Mathematical Circle Method (Round-Robin) Generator
+    const matchdays: any[] = [];
+    let currentMatchdayIdx = 1;
+
+    // 1. Within-Group Matches (Mathematically Spaced out)
+    if (options.within) {
+      const groupsRounds: any[][][] = []; // groupsRounds[group_idx][round_idx] = Array of matches
+
+      groups.forEach(group => {
+        const ids = group.clubIds;
+        if (ids.length < 2) return;
+
+        const list = [...ids];
+        if (list.length % 2 !== 0) {
+          list.push('BYE'); // Pad with bye for odd team count
+        }
+        const n = list.length;
+        const expandedRounds: any[][] = [];
+
+        for (let r = 0; r < options.rounds; r++) {
+          let currentList = [...list];
+          for (let roundIdx = 0; roundIdx < n - 1; roundIdx++) {
+            const roundMatches: any[] = [];
+            for (let i = 0; i < n / 2; i++) {
+              const home = currentList[i];
+              const away = currentList[n - 1 - i];
+              if (home !== 'BYE' && away !== 'BYE') {
+                const homeTeam = r % 2 === 0 ? home : away;
+                const awayTeam = r % 2 === 0 ? away : home;
+                roundMatches.push({
                   id: generateId(),
-                  type: 'between',
-                  groupId: groupA.id, 
-                  homeId: r % 2 === 0 ? c2 : c1,
-                  awayId: r % 2 === 0 ? c1 : c2,
+                  type: 'within',
+                  groupId: group.id,
+                  homeId: homeTeam,
+                  awayId: awayTeam,
                   homeScore: 0,
                   awayScore: 0,
                   status: 'scheduled',
-                  round: r
+                  round: r * (n - 1) + roundIdx + 1
                 });
-              });
+              }
+            }
+            expandedRounds.push(roundMatches);
+            // Rotate list elements (Circle Method, keeping first item fixed)
+            currentList = [currentList[0], currentList[n - 1], ...currentList.slice(1, n - 1)];
+          }
+        }
+        groupsRounds.push(expandedRounds);
+      });
+
+      // Merge group rounds into global Matchdays
+      if (groupsRounds.length > 0) {
+        const maxRounds = Math.max(...groupsRounds.map(gr => gr.length));
+        for (let roundIdx = 0; roundIdx < maxRounds; roundIdx++) {
+          const matchesForThisDay: any[] = [];
+          groupsRounds.forEach(gr => {
+            if (gr[roundIdx]) {
+              matchesForThisDay.push(...gr[roundIdx]);
+            }
+          });
+          if (matchesForThisDay.length > 0) {
+            matchdays.push({
+              id: generateId(),
+              label: `Matchday ${currentMatchdayIdx} (Groups)`,
+              matches: matchesForThisDay
             });
+            currentMatchdayIdx++;
           }
         }
       }
     }
 
-    // Organize into Matchdays
-    const matchesPerDay = Math.max(2, Math.ceil(rawMatches.length / 5)); 
-    const matchdays: any[] = [];
-    for (let i = 0; i < rawMatches.length; i += matchesPerDay) {
-        matchdays.push({
-            id: generateId(),
-            label: `Matchday ${Math.floor(i / matchesPerDay) + 1}`,
-            matches: rawMatches.slice(i, i + matchesPerDay).map(m => ({...m}))
+    // 2. Inter-group Bipartite Round-Robin Matches
+    if (options.between && groups.length > 1) {
+      for (let gIdx = 0; gIdx < groups.length - 1; gIdx += 2) {
+        const groupA = groups[gIdx];
+        const groupB = groups[gIdx + 1];
+        if (!groupB) break;
+
+        const listA = [...groupA.clubIds];
+        const listB = [...groupB.clubIds];
+        const size = Math.max(listA.length, listB.length);
+        while (listA.length < size) listA.push('BYE');
+        while (listB.length < size) listB.push('BYE');
+
+        const expandedInterRounds: any[][] = [];
+        for (let r = 0; r < options.rounds; r++) {
+          for (let round = 0; round < size; round++) {
+            const roundMatches: any[] = [];
+            for (let i = 0; i < size; i++) {
+              const teamA = listA[i];
+              const teamB = listB[(i + round) % size];
+              if (teamA !== 'BYE' && teamB !== 'BYE') {
+                const homeTeam = r % 2 === 0 ? teamA : teamB;
+                const awayTeam = r % 2 === 0 ? teamB : teamA;
+                roundMatches.push({
+                  id: generateId(),
+                  type: 'between',
+                  groupId: groupA.id, 
+                  homeId: homeTeam,
+                  awayId: awayTeam,
+                  homeScore: 0,
+                  awayScore: 0,
+                  status: 'scheduled',
+                  round: r * size + round + 1
+                });
+              }
+            }
+            expandedInterRounds.push(roundMatches);
+          }
+        }
+
+        expandedInterRounds.forEach((roundMatches) => {
+          if (roundMatches.length > 0) {
+            matchdays.push({
+              id: generateId(),
+              label: `Matchday ${currentMatchdayIdx} (Inter-Group Rivals)`,
+              matches: roundMatches
+            });
+            currentMatchdayIdx++;
+          }
         });
+      }
     }
 
     setFixtures(matchdays);
     setActiveTab('fixtures');
+    setIsGeneratingFixtures(false);
   };
 
   const generateBracket = () => {
@@ -389,6 +495,10 @@ export default function App() {
                           groups={groups} 
                           setGroups={setGroups} 
                           onGenerate={generateFixtures}
+                          schedulingMode={schedulingMode}
+                          setSchedulingMode={setSchedulingMode}
+                          isGenerating={isGeneratingFixtures}
+                          error={fixtureError}
                         />
                       )}
                       {activeTab === 'fixtures' && (
@@ -626,16 +736,11 @@ function ClubsTab({ clubs, setClubs, onNext }: any) {
   );
 }
 
-function GroupsTab({ clubs, groups, setGroups, onGenerate }: any) {
+function GroupsTab({ clubs, groups, setGroups, onGenerate, schedulingMode, setSchedulingMode, isGenerating, error }: any) {
   const [selectedClub, setSelectedClub] = useState<string | null>(null);
   const [numGroups, setNumGroups] = useState(groups.length || 2);
-  const [showConfig, setShowConfig] = useState(fixturesNeeded(groups));
   
   const [fixtureConfig, setFixtureConfig] = useState({ within: true, between: false, rounds: 1 });
-
-  function fixturesNeeded(gs: any[]) {
-      return gs.some(g => g.clubIds.length > 0);
-  }
 
   const getAssignedClubIds = () => groups.flatMap((g: any) => g.clubIds);
   const unassignedClubs = clubs.filter((c: any) => !getAssignedClubIds().includes(c.id));
@@ -683,7 +788,21 @@ function GroupsTab({ clubs, groups, setGroups, onGenerate }: any) {
   };
 
   return (
-    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-8">
+    <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-8 relative">
+      {isGenerating && (
+        <div className="absolute inset-0 bg-slate-950/80 backdrop-blur-sm z-50 flex flex-col items-center justify-center rounded-3xl min-h-[600px] gap-4">
+          <div className="w-16 h-16 bg-slate-900 border border-indigo-500/50 rounded-2xl flex items-center justify-center animate-spin">
+             <RefreshCw className="w-8 h-8 text-indigo-400" />
+          </div>
+          <p className="text-white font-black uppercase text-sm tracking-widest animate-pulse">
+            {schedulingMode === 'ai' ? 'Consulting Gemini AI Scheduler...' : 'Structuring Perfect Tournament Rounds...'}
+          </p>
+          <p className="text-slate-500 text-xs text-center max-w-xs leading-relaxed">
+            {schedulingMode === 'ai' ? 'Organizing thematic matches, assuring no same-day club duplicates' : 'Running optimized circle-method scheduling algorithms'}
+          </p>
+        </div>
+      )}
+
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-6 border-b border-slate-800 pb-6">
         <div>
           <h2 className="text-2xl font-display font-black text-white uppercase tracking-tight flex items-center gap-3">
@@ -708,6 +827,13 @@ function GroupsTab({ clubs, groups, setGroups, onGenerate }: any) {
           </div>
         </div>
       </div>
+
+      {error && (
+        <div className="bg-yellow-500/10 border border-yellow-500/20 text-yellow-500 p-4 rounded-2xl text-xs font-bold leading-relaxed flex items-start gap-3">
+          <AlertTriangle className="w-5 h-5 flex-shrink-0" />
+          <span>{error}</span>
+        </div>
+      )}
 
       <div className="flex flex-col xl:flex-row gap-8">
         {/* Pool of Unassigned Clubs */}
@@ -779,17 +905,17 @@ function GroupsTab({ clubs, groups, setGroups, onGenerate }: any) {
               <h3 className="text-lg font-display font-black text-white uppercase italic mb-4 flex items-center gap-2">
                 <Settings className="w-5 h-5 text-indigo-500" /> Fixture Generation Options
               </h3>
-              <div className="grid grid-cols-1 sm:grid-cols-3 md:grid-cols-4 gap-4">
+              <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
                   <button 
                     onClick={() => setFixtureConfig(prev => ({ ...prev, within: !prev.within }))}
-                    className={`flex flex-col items-center justify-center p-4 rounded-2xl border-2 transition-all ${fixtureConfig.within ? 'bg-indigo-600/10 border-indigo-500 text-indigo-400' : 'bg-slate-950 border-slate-800 text-slate-600'}`}
+                    className={`flex flex-col items-center justify-center p-4 rounded-2xl border-2 transition-all cursor-pointer ${fixtureConfig.within ? 'bg-indigo-600/10 border-indigo-500 text-indigo-400' : 'bg-slate-950 border-slate-800 text-slate-600'}`}
                   >
                     <Users className="w-6 h-6 mb-2" />
                     <span className="font-bold text-xs uppercase">Within Groups</span>
                   </button>
                   <button 
                     onClick={() => setFixtureConfig(prev => ({ ...prev, between: !prev.between }))}
-                    className={`flex flex-col items-center justify-center p-4 rounded-2xl border-2 transition-all ${fixtureConfig.between ? 'bg-indigo-600/10 border-indigo-500 text-indigo-400' : 'bg-slate-950 border-slate-800 text-slate-600'}`}
+                    className={`flex flex-col items-center justify-center p-4 rounded-2xl border-2 transition-all cursor-pointer ${fixtureConfig.between ? 'bg-indigo-600/10 border-indigo-500 text-indigo-400' : 'bg-slate-950 border-slate-800 text-slate-600'}`}
                   >
                     <ArrowRightLeft className="w-6 h-6 mb-2" />
                     <span className="font-bold text-xs uppercase">Between Groups</span>
@@ -801,20 +927,42 @@ function GroupsTab({ clubs, groups, setGroups, onGenerate }: any) {
                             <button
                                 key={r}
                                 onClick={() => setFixtureConfig(prev => ({ ...prev, rounds: r }))}
-                                className={`w-8 h-8 rounded-lg font-black text-xs transition-all ${fixtureConfig.rounds === r ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30' : 'bg-slate-900 text-slate-500 hover:text-slate-300'}`}
+                                className={`w-8 h-8 rounded-lg font-black text-xs transition-all cursor-pointer ${fixtureConfig.rounds === r ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30' : 'bg-slate-900 text-slate-500 hover:text-slate-300'}`}
                             >
                                 {r}
                             </button>
                         ))}
                     </div>
                   </div>
+
+                  {/* Scheduling Engine Switcher */}
+                  <div className="flex flex-col items-center justify-center p-4 rounded-2xl border-2 bg-slate-950 border-slate-800">
+                    <span className="text-[10px] font-black text-slate-500 uppercase mb-2">Scheduling Engine</span>
+                    <div className="flex bg-slate-900 p-1 rounded-xl w-full">
+                      <button 
+                        onClick={() => setSchedulingMode('algorithmic')}
+                        className={`flex-1 py-2 rounded-lg text-xs font-black uppercase transition-all whitespace-nowrap cursor-pointer ${schedulingMode === 'algorithmic' ? 'bg-indigo-600 text-white shadow-md' : 'text-slate-500 hover:text-slate-300'}`}
+                      >
+                        Math Round
+                      </button>
+                      <button 
+                        onClick={() => setSchedulingMode('ai')}
+                        className={`flex-1 py-2 rounded-lg text-xs font-black uppercase transition-all flex items-center justify-center gap-1 cursor-pointer whitespace-nowrap ${schedulingMode === 'ai' ? 'bg-purple-600 text-white shadow-md' : 'text-slate-300 hover:text-slate-300'}`}
+                      >
+                        <Sparkles className="w-3.5 h-3.5 text-yellow-400" /> Gemini AI
+                      </button>
+                    </div>
+                  </div>
+
                   <button 
                     onClick={() => onGenerate(fixtureConfig)}
                     disabled={unassignedClubs.length > 0 || clubs.length === 0 || (!fixtureConfig.within && !fixtureConfig.between)}
-                    className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 text-white font-black rounded-2xl transition-all shadow-lg flex flex-col items-center justify-center sm:col-span-3 md:col-span-1"
+                    className="bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-500 text-white font-black rounded-2xl transition-all shadow-lg flex flex-col items-center justify-center col-span-full py-4 cursor-pointer active:scale-[0.99]"
                   >
-                    <Plus className="w-6 h-6 mb-2" />
-                    <span className="font-bold text-xs uppercase">Generate</span>
+                    <div className="flex items-center gap-2">
+                      <Plus className="w-5 h-5" />
+                      <span className="font-bold text-sm uppercase">Generate Fixtures</span>
+                    </div>
                   </button>
               </div>
               {unassignedClubs.length > 0 && <p className="text-red-500 text-[10px] font-bold uppercase mt-4 text-center">Unassigned teams remain in pool!</p>}
@@ -827,6 +975,9 @@ function GroupsTab({ clubs, groups, setGroups, onGenerate }: any) {
 
 function FixturesTab({ fixtures, setFixtures, clubs, tournamentName }: any) {
   const exportRef = useRef<HTMLDivElement>(null);
+  const [selectedMatchdayIdx, setSelectedMatchdayIdx] = useState<number>(0);
+  const [previewImg, setPreviewImg] = useState<string | null>(null);
+  const [exportType, setExportType] = useState<'png' | 'pdf' | null>(null);
 
   const updateScore = (matchdayId: string, fixtureId: string, side: 'home' | 'away', value: string) => {
     const val = parseInt(value) || 0;
@@ -855,20 +1006,23 @@ function FixturesTab({ fixtures, setFixtures, clubs, tournamentName }: any) {
             useCORS: true,
             logging: false
         });
+        const dataUrl = canvas.toDataURL('image/png');
+        setPreviewImg(dataUrl);
+        setExportType(type);
+
         if (type === 'png') {
             const link = document.createElement('a');
             link.download = `${tournamentName || 'Tournament'}_Fixtures.png`;
-            link.href = canvas.toDataURL('image/png');
+            link.href = dataUrl;
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
         } else {
-            const imgData = canvas.toDataURL('image/png', 1.0);
             const pdf = new jsPDF('p', 'mm', 'a4');
-            const imgProps = pdf.getImageProperties(imgData);
+            const imgProps = pdf.getImageProperties(dataUrl);
             const pdfWidth = pdf.internal.pageSize.getWidth();
             const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
-            pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+            pdf.addImage(dataUrl, 'PNG', 0, 0, pdfWidth, pdfHeight);
             pdf.save(`${tournamentName || 'Tournament'}_Fixtures.pdf`);
         }
     } catch (err) {
@@ -876,8 +1030,52 @@ function FixturesTab({ fixtures, setFixtures, clubs, tournamentName }: any) {
     }
   };
 
+  const displayedFixtures = selectedMatchdayIdx === -1 
+    ? fixtures 
+    : (fixtures[selectedMatchdayIdx] ? [fixtures[selectedMatchdayIdx]] : []);
+
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-8">
+      {/* Fallback Preview/Instructions Overlay Modal */}
+      {previewImg && (
+         <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-50 flex items-center justify-center p-4">
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 lg:p-8 max-w-2xl w-full max-h-[90vh] overflow-y-auto flex flex-col gap-6 relative shadow-2xl">
+               <button 
+                  onClick={() => { setPreviewImg(null); setExportType(null); }}
+                  className="absolute top-4 right-4 p-2 bg-slate-950/80 rounded-full border border-slate-800 text-slate-400 hover:text-white transition-colors cursor-pointer"
+               >
+                  <X className="w-4 h-4" />
+               </button>
+               <div className="text-center space-y-2">
+                  <div className="w-12 h-12 bg-green-500/10 text-green-500 rounded-2xl flex items-center justify-center mx-auto border border-green-500/20">
+                     <Check className="w-6 h-6" />
+                  </div>
+                  <h3 className="text-xl font-display font-black text-white uppercase tracking-tight">Export Initiated</h3>
+                  <p className="text-slate-400 text-xs max-w-md mx-auto leading-relaxed">
+                     Your {exportType?.toUpperCase()} document generation is ready. Since this application runs in a secure sandboxed preview iframe, browser policies might block immediate direct downloads.
+                  </p>
+               </div>
+               
+               <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 flex flex-col gap-3">
+                  <span className="text-[10px] font-black text-slate-500 uppercase tracking-wider">High Resolution Preview</span>
+                  <img src={previewImg} className="max-h-[250px] object-contain rounded-lg border border-slate-800 mx-auto" alt="Generated Preview" />
+                  <p className="text-indigo-400 text-[11px] font-bold text-center leading-relaxed">
+                    💡 HELPFUL EXTRA TIP: If your browser block-shield is up, simply right-click on the image above and click "Save Image As...", or open this app in a separate tab to trigger standard click-to-downloads!
+                  </p>
+               </div>
+               
+               <div className="flex gap-2 w-full">
+                  <button 
+                     onClick={() => { setPreviewImg(null); setExportType(null); }}
+                     className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3.5 rounded-xl text-xs uppercase cursor-pointer"
+                  >
+                     Got It, Return To Arena
+                  </button>
+               </div>
+            </div>
+         </div>
+      )}
+
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-6 border-b border-slate-800 pb-6">
         <div>
           <h2 className="text-2xl font-display font-black text-white uppercase tracking-tight flex items-center gap-3">
@@ -888,21 +1086,50 @@ function FixturesTab({ fixtures, setFixtures, clubs, tournamentName }: any) {
         <div className="flex gap-2 w-full sm:w-auto">
             <button 
                 onClick={() => handleExport('png')}
-                className="flex-1 bg-slate-950 hover:bg-slate-800 text-slate-300 font-bold px-4 py-3 rounded-xl border border-slate-800 text-[10px] uppercase flex items-center justify-center gap-2"
+                className="flex-1 bg-slate-950 hover:bg-slate-800 text-slate-300 font-bold px-4 py-3 rounded-xl border border-slate-800 text-[10px] uppercase flex items-center justify-center gap-2 cursor-pointer"
             >
                 <ImageIcon className="w-3.5 h-3.5" /> PNG
             </button>
             <button 
                 onClick={() => handleExport('pdf')}
-                className="flex-1 bg-slate-950 hover:bg-slate-800 text-slate-300 font-bold px-4 py-3 rounded-xl border border-slate-800 text-[10px] uppercase flex items-center justify-center gap-2"
+                className="flex-1 bg-slate-950 hover:bg-slate-800 text-slate-300 font-bold px-4 py-3 rounded-xl border border-slate-800 text-[10px] uppercase flex items-center justify-center gap-2 cursor-pointer"
             >
                 <FileText className="w-3.5 h-3.5" /> PDF
             </button>
         </div>
       </div>
 
+      {/* Segmented Matchday Menu Browser */}
+      {fixtures.length > 0 && (
+        <div className="flex flex-col gap-3 bg-slate-950 border border-slate-800/60 p-4 rounded-2xl">
+          <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+            <div>
+              <span className="text-[10px] font-black text-slate-500 uppercase tracking-wider block">Matchday Navigator</span>
+              <p className="text-[11px] text-slate-400 mt-0.5">Focus on one round of play or review the entire card.</p>
+            </div>
+            <button 
+              onClick={() => setSelectedMatchdayIdx(-1)}
+              className={`px-4 py-1.5 rounded-xl text-[10px] font-black uppercase border transition-all cursor-pointer ${selectedMatchdayIdx === -1 ? 'bg-indigo-600 border-indigo-500 text-white shadow-lg shadow-indigo-600/20' : 'bg-slate-900 border-slate-800 text-slate-400 hover:text-white'}`}
+            >
+              All Matchdays
+            </button>
+          </div>
+          <div className="flex gap-2 overflow-x-auto pb-2 snap-x">
+             {fixtures.map((md: any, idx: number) => (
+                <button
+                  key={md.id}
+                  onClick={() => setSelectedMatchdayIdx(idx)}
+                  className={`px-4 py-3 rounded-xl text-[10px] font-black uppercase transition-all snap-start shrink-0 border cursor-pointer ${selectedMatchdayIdx === idx ? 'bg-indigo-600 border-indigo-500 text-white shadow-xl shadow-indigo-600/20' : 'bg-slate-900 border-slate-800/40 text-slate-500 hover:text-slate-300'}`}
+                >
+                  {md.label}
+                </button>
+             ))}
+          </div>
+        </div>
+      )}
+
       <div ref={exportRef} className="space-y-12 p-4 bg-slate-950 rounded-3xl">
-        {fixtures.map((md: any) => (
+        {displayedFixtures.map((md: any) => (
           <div key={md.id} className="space-y-4">
              <div className="flex items-center gap-4">
                 <span className="bg-indigo-600 text-white font-black text-[10px] px-3 py-1 rounded-full uppercase tracking-widest whitespace-nowrap">
@@ -921,13 +1148,13 @@ function FixturesTab({ fixtures, setFixtures, clubs, tournamentName }: any) {
                              <div className="flex flex-col gap-3 flex-1 min-w-0">
                                 <div className="flex items-center gap-2 overflow-hidden">
                                     <div className="w-6 h-6 bg-slate-950 rounded-md flex-shrink-0 flex items-center justify-center overflow-hidden border border-slate-800">
-                                        {home?.logo ? <img src={home.logo} className="w-full h-full object-cover" /> : <span className="text-[8px] text-slate-600 font-black">{home?.name.substring(0, 1)}</span>}
+                                        {home?.logo ? <img src={home.logo} className="w-full h-full object-cover" referrerPolicy="no-referrer" /> : <span className="text-[8px] text-slate-600 font-black">{home?.name.substring(0, 1)}</span>}
                                     </div>
                                     <span className="text-xs font-bold text-slate-300 truncate uppercase">{home?.name}</span>
                                 </div>
                                 <div className="flex items-center gap-2 overflow-hidden">
                                     <div className="w-6 h-6 bg-slate-950 rounded-md flex-shrink-0 flex items-center justify-center overflow-hidden border border-slate-800">
-                                        {away?.logo ? <img src={away.logo} className="w-full h-full object-cover" /> : <span className="text-[8px] text-slate-600 font-black">{away?.name.substring(0, 1)}</span>}
+                                        {away?.logo ? <img src={away.logo} className="w-full h-full object-cover" referrerPolicy="no-referrer" /> : <span className="text-[8px] text-slate-600 font-black">{away?.name.substring(0, 1)}</span>}
                                     </div>
                                     <span className="text-xs font-bold text-slate-300 truncate uppercase">{away?.name}</span>
                                 </div>
@@ -964,6 +1191,8 @@ function FixturesTab({ fixtures, setFixtures, clubs, tournamentName }: any) {
 
 function StandingsTab({ standings, clubs, groups, tournamentName }: any) {
   const exportRef = useRef<HTMLDivElement>(null);
+  const [previewImg, setPreviewImg] = useState<string | null>(null);
+  const [exportType, setExportType] = useState<'png' | 'pdf' | null>(null);
 
   const handleExport = async (type: 'png' | 'pdf') => {
     if (!exportRef.current) return;
@@ -974,20 +1203,23 @@ function StandingsTab({ standings, clubs, groups, tournamentName }: any) {
             useCORS: true,
             logging: false
         });
+        const dataUrl = canvas.toDataURL('image/png');
+        setPreviewImg(dataUrl);
+        setExportType(type);
+
         if (type === 'png') {
             const link = document.createElement('a');
             link.download = `${tournamentName || 'Tournament'}_Standings.png`;
-            link.href = canvas.toDataURL('image/png');
+            link.href = dataUrl;
             document.body.appendChild(link);
             link.click();
             document.body.removeChild(link);
         } else {
-            const imgData = canvas.toDataURL('image/png', 1.0);
             const pdf = new jsPDF('l', 'mm', 'a4'); 
-            const imgProps = pdf.getImageProperties(imgData);
+            const imgProps = pdf.getImageProperties(dataUrl);
             const pdfWidth = pdf.internal.pageSize.getWidth();
             const pdfHeight = (imgProps.height * pdfWidth) / imgProps.width;
-            pdf.addImage(imgData, 'PNG', 0, 0, pdfWidth, pdfHeight);
+            pdf.addImage(dataUrl, 'PNG', 0, 0, pdfWidth, pdfHeight);
             pdf.save(`${tournamentName || 'Tournament'}_Standings.pdf`);
         }
     } catch (err) {
@@ -997,6 +1229,46 @@ function StandingsTab({ standings, clubs, groups, tournamentName }: any) {
 
   return (
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-8">
+      {/* Fallback Preview/Instructions Overlay Modal */}
+      {previewImg && (
+         <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-50 flex items-center justify-center p-4">
+            <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 lg:p-8 max-w-2xl w-full max-h-[90vh] overflow-y-auto flex flex-col gap-6 relative shadow-2xl">
+               <button 
+                  onClick={() => { setPreviewImg(null); setExportType(null); }}
+                  className="absolute top-4 right-4 p-2 bg-slate-950/80 rounded-full border border-slate-800 text-slate-400 hover:text-white transition-colors cursor-pointer"
+               >
+                  <X className="w-4 h-4" />
+               </button>
+               <div className="text-center space-y-2">
+                  <div className="w-12 h-12 bg-green-500/10 text-green-500 rounded-2xl flex items-center justify-center mx-auto border border-green-500/20">
+                     <Check className="w-6 h-6" />
+                  </div>
+                  <h3 className="text-xl font-display font-black text-white uppercase tracking-tight">Export Initiated</h3>
+                  <p className="text-slate-400 text-xs max-w-md mx-auto leading-relaxed">
+                     Your standings sheet {exportType?.toUpperCase()} document is ready. Since this application runs in a secure sandboxed preview iframe, browser policies might block immediate direct downloads.
+                  </p>
+               </div>
+               
+               <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 flex flex-col gap-3">
+                  <span className="text-[10px] font-black text-slate-500 uppercase tracking-wider">High Resolution Standings Preview</span>
+                  <img src={previewImg} className="max-h-[250px] object-contain rounded-lg border border-slate-800 mx-auto" alt="Generated Standings Preview" />
+                  <p className="text-indigo-400 text-[11px] font-bold text-center leading-relaxed">
+                    💡 HELPFUL EXTRA TIP: If your browser block-shield is up, simply right-click on the image above and click "Save Image As...", or open this app in a separate tab to trigger standard click-to-downloads!
+                  </p>
+               </div>
+               
+               <div className="flex gap-2 w-full">
+                  <button 
+                     onClick={() => { setPreviewImg(null); setExportType(null); }}
+                     className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3.5 rounded-xl text-xs uppercase cursor-pointer"
+                  >
+                     Got It, Return To Standings
+                  </button>
+               </div>
+            </div>
+         </div>
+      )}
+
       <div className="flex flex-col sm:flex-row justify-between items-start sm:items-end gap-6 border-b border-slate-800 pb-6">
         <div>
           <h2 className="text-2xl font-display font-black text-white uppercase tracking-tight flex items-center justify-center lg:justify-start gap-3">
@@ -1007,13 +1279,13 @@ function StandingsTab({ standings, clubs, groups, tournamentName }: any) {
         <div className="flex gap-2 w-full sm:w-auto">
             <button 
                 onClick={() => handleExport('png')}
-                className="flex-1 bg-slate-950 hover:bg-slate-800 text-slate-300 font-bold px-4 py-3 rounded-xl border border-slate-800 text-[10px] uppercase flex items-center justify-center gap-2"
+                className="flex-1 bg-slate-950 hover:bg-slate-800 text-slate-300 font-bold px-4 py-3 rounded-xl border border-slate-800 text-[10px] uppercase flex items-center justify-center gap-2 cursor-pointer"
             >
                 <ImageIcon className="w-3.5 h-3.5" /> PNG
             </button>
             <button 
                 onClick={() => handleExport('pdf')}
-                className="flex-1 bg-slate-950 hover:bg-slate-800 text-slate-300 font-bold px-4 py-3 rounded-xl border border-slate-800 text-[10px] uppercase flex items-center justify-center gap-2"
+                className="flex-1 bg-slate-950 hover:bg-slate-800 text-slate-300 font-bold px-4 py-3 rounded-xl border border-slate-800 text-[10px] uppercase flex items-center justify-center gap-2 cursor-pointer"
             >
                 <FileText className="w-3.5 h-3.5" /> PDF
             </button>
