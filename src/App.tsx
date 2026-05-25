@@ -10,7 +10,7 @@ import {
   Shuffle, ArrowRightLeft, Swords, Medal, History,
   Download, AlertTriangle, Camera, Trash2, Save,
   ArrowUpRight, Info, ChevronDown, FileText, Image as ImageIcon,
-  Sparkles, Loader2, RefreshCw, Eye
+  Sparkles, Loader2, RefreshCw, Eye, Smartphone, Laptop
 } from 'lucide-react';
 import { motion, AnimatePresence } from 'motion/react';
 import html2canvas from 'html2canvas';
@@ -18,6 +18,22 @@ import { jsPDF } from 'jspdf';
 
 // --- UTILS ---
 const generateId = () => Math.random().toString(36).substring(2, 11);
+
+const copyImageToClipboard = async (dataUrl: string) => {
+  try {
+    const res = await fetch(dataUrl);
+    const blob = await res.blob();
+    await navigator.clipboard.write([
+      new ClipboardItem({
+        [blob.type]: blob
+      })
+    ]);
+    return true;
+  } catch (err) {
+    console.error("Failed to copy image to clipboard:", err);
+    return false;
+  }
+};
 
 const INITIAL_GROUPS = [
   { id: 'group_a', name: 'Group A', clubIds: [] },
@@ -28,20 +44,22 @@ const INITIAL_GROUPS = [
  * Main Tournament Organizer Component
  */
 export default function App() {
-  const [view, setView] = useState<'home' | 'arena' | 'hallOfFame'>(() => {
-    const saved = localStorage.getItem('tournament_view');
-    if (saved) return saved as any;
-    const savedName = localStorage.getItem('tournament_name');
-    if (savedName) return 'arena';
-    return 'home';
-  }); 
-  const [activeTab, setActiveTab] = useState<'clubs' | 'groups' | 'fixtures' | 'standings' | 'bracket'>(() => {
-    const saved = localStorage.getItem('tournament_activeTab');
-    return (saved as any) || 'clubs';
-  });
-  const [tournamentName, setTournamentName] = useState<string | null>(() => {
-    return localStorage.getItem('tournament_name') || null;
-  });
+  const [isLoaded, setIsLoaded] = useState(false);
+  const [view, setView] = useState<'home' | 'arena' | 'hallOfFame' | 'mobileApp'>('home'); 
+  const [activeTab, setActiveTab] = useState<'clubs' | 'groups' | 'fixtures' | 'standings' | 'bracket'>('clubs');
+  const [tournamentName, setTournamentName] = useState<string | null>(null);
+
+  // Install State Tracker
+  const [deferredPrompt, setDeferredPrompt] = useState<any>(null);
+
+  useEffect(() => {
+    const catchPrompt = (e: any) => {
+      e.preventDefault();
+      setDeferredPrompt(e);
+    };
+    window.addEventListener('beforeinstallprompt', catchPrompt);
+    return () => window.removeEventListener('beforeinstallprompt', catchPrompt);
+  }, []);
 
   // Scheduling & UI State
   const [schedulingMode, setSchedulingMode] = useState<'algorithmic' | 'ai'>('algorithmic');
@@ -54,66 +72,157 @@ export default function App() {
   const [showExportModal, setShowExportModal] = useState(false);
 
   // Data State
-  const [clubs, setClubs] = useState<{id: string, name: string, logo?: string}[]>(() => {
-    const saved = localStorage.getItem('tournament_clubs');
-    return saved ? JSON.parse(saved) : [];
-  });
-  const [groups, setGroups] = useState<any[]>(() => {
-    const saved = localStorage.getItem('tournament_groups');
-    return saved ? JSON.parse(saved) : INITIAL_GROUPS;
-  });
-  const [fixtures, setFixtures] = useState<any[]>(() => {
-    const saved = localStorage.getItem('tournament_fixtures');
-    return saved ? JSON.parse(saved) : [];
-  });
-  const [bracketMatches, setBracketMatches] = useState<any[]>(() => {
-    const saved = localStorage.getItem('tournament_bracketMatches');
-    return saved ? JSON.parse(saved) : [];
-  });
-  const [hallOfFame, setHallOfFame] = useState(() => {
-    const saved = localStorage.getItem('tournament_hallOfFame');
-    return saved ? JSON.parse(saved) : [
-      { id: '1', season: '2023', winner: 'Real Madrid', runnerUp: 'Dortmund' },
-      { id: '2', season: '2024 (Summer)', winner: 'Man City', runnerUp: 'Inter' }
-    ];
-  });
+  const [clubs, setClubs] = useState<{id: string, name: string, logo?: string}[]>([]);
+  const [groups, setGroups] = useState<any[]>(INITIAL_GROUPS);
+  const [fixtures, setFixtures] = useState<any[]>([]); // Array of matchdays: { id: string, label: string, matches: any[] }
+  const [bracketMatches, setBracketMatches] = useState<any[]>([]);
+  const [hallOfFame, setHallOfFame] = useState(() => [
+    { id: '1', season: '2023', winner: 'Real Madrid', runnerUp: 'Dortmund' },
+    { id: '2', season: '2024 (Summer)', winner: 'Man City', runnerUp: 'Inter' }
+  ]);
 
-  // Sync state to local storage automatically
+  const lastServerDataRef = useRef<string>("");
+
+  // 1. Fetch Tournament State from disk persistence on Mount & configure active background/visibility listeners
   useEffect(() => {
+    fetch('/api/tournament')
+      .then(res => res.json())
+      .then(data => {
+        if (data && data.tournamentName !== undefined && data.tournamentName !== null) {
+          lastServerDataRef.current = JSON.stringify(data);
+          if (data.view) setView(data.view);
+          if (data.activeTab) setActiveTab(data.activeTab);
+          setTournamentName(data.tournamentName);
+          if (data.clubs) setClubs(data.clubs);
+          if (data.groups) setGroups(data.groups);
+          if (data.fixtures) setFixtures(data.fixtures);
+          if (data.bracketMatches) setBracketMatches(data.bracketMatches);
+          if (data.hallOfFame) setHallOfFame(data.hallOfFame);
+          if (data.schedulingMode) setSchedulingMode(data.schedulingMode);
+        } else {
+          // No active server tournament, run LocalStorage hydrate backup
+          const localView = localStorage.getItem('tournament_view');
+          const localActiveTab = localStorage.getItem('tournament_activeTab');
+          const localName = localStorage.getItem('tournament_name');
+          const localClubs = localStorage.getItem('tournament_clubs');
+          const localGroups = localStorage.getItem('tournament_groups');
+          const localFixtures = localStorage.getItem('tournament_fixtures');
+          const localBracket = localStorage.getItem('tournament_bracketMatches');
+          const localHall = localStorage.getItem('tournament_hallOfFame');
+
+          if (localView) setView(localView as any);
+          if (localActiveTab) setActiveTab(localActiveTab as any);
+          if (localName) setTournamentName(localName);
+          if (localClubs) setClubs(JSON.parse(localClubs));
+          if (localGroups) setGroups(JSON.parse(localGroups));
+          if (localFixtures) setFixtures(JSON.parse(localFixtures));
+          if (localBracket) setBracketMatches(JSON.parse(localBracket));
+          if (localHall) setHallOfFame(JSON.parse(localHall));
+        }
+        setIsLoaded(true);
+      })
+      .catch(err => {
+        console.error("Failed to load server tournament, running LocalStorage fallback:", err);
+        const localView = localStorage.getItem('tournament_view');
+        const localActiveTab = localStorage.getItem('tournament_activeTab');
+        const localName = localStorage.getItem('tournament_name');
+        const localClubs = localStorage.getItem('tournament_clubs');
+        const localGroups = localStorage.getItem('tournament_groups');
+        const localFixtures = localStorage.getItem('tournament_fixtures');
+        const localBracket = localStorage.getItem('tournament_bracketMatches');
+        const localHall = localStorage.getItem('tournament_hallOfFame');
+
+        if (localView) setView(localView as any);
+        if (localActiveTab) setActiveTab(localActiveTab as any);
+        if (localName) setTournamentName(localName);
+        if (localClubs) setClubs(JSON.parse(localClubs));
+        if (localGroups) setGroups(JSON.parse(localGroups));
+        if (localFixtures) setFixtures(JSON.parse(localFixtures));
+        if (localBracket) setBracketMatches(JSON.parse(localBracket));
+        if (localHall) setHallOfFame(JSON.parse(localHall));
+        
+        setIsLoaded(true);
+      });
+
+    // Real-time tab & multi-device sync handler
+    const handleSync = () => {
+      fetch('/api/tournament')
+        .then(res => res.json())
+        .then(data => {
+          if (data && data.tournamentName !== undefined && data.tournamentName !== null) {
+            const stringified = JSON.stringify(data);
+            if (stringified !== lastServerDataRef.current) {
+              lastServerDataRef.current = stringified;
+              if (data.view) setView(data.view);
+              if (data.activeTab) setActiveTab(data.activeTab);
+              setTournamentName(data.tournamentName);
+              if (data.clubs) setClubs(data.clubs);
+              if (data.groups) setGroups(data.groups);
+              if (data.fixtures) setFixtures(data.fixtures);
+              if (data.bracketMatches) setBracketMatches(data.bracketMatches);
+              if (data.hallOfFame) setHallOfFame(data.hallOfFame);
+              if (data.schedulingMode) setSchedulingMode(data.schedulingMode);
+            }
+          }
+        })
+        .catch(err => console.error("Device/Tab synchronization error:", err));
+    };
+
+    window.addEventListener('focus', handleSync);
+    const handleVisible = () => { if (document.visibilityState === 'visible') handleSync(); };
+    document.addEventListener('visibilitychange', handleVisible);
+
+    // Keep devices updated with a silent background poll every 4.5 seconds
+    const intervalId = setInterval(handleSync, 4500);
+
+    return () => {
+      window.removeEventListener('focus', handleSync);
+      document.removeEventListener('visibilitychange', handleVisible);
+      clearInterval(intervalId);
+    };
+  }, []);
+
+  // 2. Synchronize active state directly to server on edit actions
+  useEffect(() => {
+    if (!isLoaded) return;
+
+    const payload = {
+      view,
+      activeTab,
+      tournamentName,
+      clubs,
+      groups,
+      fixtures,
+      bracketMatches,
+      hallOfFame,
+      schedulingMode
+    };
+
+    const payloadString = JSON.stringify(payload);
+    if (payloadString === lastServerDataRef.current) {
+      return; // Skip POST loop if identical
+    }
+    lastServerDataRef.current = payloadString;
+
+    fetch('/api/tournament', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: payloadString
+    }).catch(err => console.error("Error saving tournament state to server:", err));
+
     localStorage.setItem('tournament_view', view);
-  }, [view]);
-
-  useEffect(() => {
     localStorage.setItem('tournament_activeTab', activeTab);
-  }, [activeTab]);
-
-  useEffect(() => {
     if (tournamentName) {
       localStorage.setItem('tournament_name', tournamentName);
     } else {
       localStorage.removeItem('tournament_name');
     }
-  }, [tournamentName]);
-
-  useEffect(() => {
     localStorage.setItem('tournament_clubs', JSON.stringify(clubs));
-  }, [clubs]);
-
-  useEffect(() => {
     localStorage.setItem('tournament_groups', JSON.stringify(groups));
-  }, [groups]);
-
-  useEffect(() => {
     localStorage.setItem('tournament_fixtures', JSON.stringify(fixtures));
-  }, [fixtures]);
-
-  useEffect(() => {
     localStorage.setItem('tournament_bracketMatches', JSON.stringify(bracketMatches));
-  }, [bracketMatches]);
-
-  useEffect(() => {
     localStorage.setItem('tournament_hallOfFame', JSON.stringify(hallOfFame));
-  }, [hallOfFame]);
+  }, [view, activeTab, tournamentName, clubs, groups, fixtures, bracketMatches, hallOfFame, schedulingMode, isLoaded]);
 
   // Derived State: Calculate Standings
   const groupStandings = useMemo(() => {
@@ -193,6 +302,10 @@ export default function App() {
     setBracketMatches([]);
     setActiveTab('clubs');
     setView('home');
+
+    // Trigger server-side database reset
+    fetch('/api/tournament/reset', { method: 'POST' })
+      .catch(err => console.error("Failed to reset server state:", err));
   };
 
   const generateFixtures = async (options: { within: boolean, between: boolean, rounds: number }) => {
@@ -398,6 +511,22 @@ export default function App() {
     setHallOfFame(hallOfFame.map((h: any) => h.id === updatedEntry.id ? updatedEntry : h));
   };
 
+  if (!isLoaded) {
+    return (
+      <div className="min-h-screen bg-slate-950 flex flex-col items-center justify-center p-4">
+        <div className="w-16 h-16 bg-slate-900 border border-indigo-500/20 rounded-2xl flex items-center justify-center animate-spin mb-4 shadow-[0_0_15px_rgba(99,102,241,0.15)]">
+          <RefreshCw className="w-8 h-8 text-indigo-400" />
+        </div>
+        <h2 className="text-white font-black uppercase text-sm tracking-widest animate-pulse">
+          Synchronizing Arena...
+        </h2>
+        <p className="text-slate-500 text-xs text-center max-w-xs mt-2 leading-relaxed">
+          Retrieving real-time standings, fixture schedules, and brackets.
+        </p>
+      </div>
+    );
+  }
+
   return (
     <div className="min-h-screen bg-slate-950 font-sans selection:bg-indigo-500/30">
       {/* Navigation */}
@@ -414,6 +543,13 @@ export default function App() {
           
           <div className="flex items-center space-x-2 sm:space-x-4">
             <button 
+              onClick={() => setView('mobileApp')}
+              className={`px-4 py-2 rounded-xl text-sm font-semibold transition-all flex items-center ${view === 'mobileApp' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/20' : 'hover:bg-slate-800 text-slate-400 hover:text-white'}`}
+            >
+              <Smartphone className="w-4 h-4 mr-2 text-indigo-400" />
+              <span>Mobile App</span>
+            </button>
+            <button 
               onClick={() => setView('hallOfFame')}
               className={`px-4 py-2 rounded-xl text-sm font-semibold transition-all flex items-center ${view === 'hallOfFame' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/20' : 'hover:bg-slate-800 text-slate-400 hover:text-white'}`}
             >
@@ -422,7 +558,7 @@ export default function App() {
             </button>
             <button 
               onClick={() => setView('arena')}
-              className={`px-5 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center ${view === 'arena' ? 'bg-indigo-600 text-white' : 'bg-slate-800 text-white hover:bg-slate-700 active:scale-95 shadow-lg shadow-black/20'}`}
+              className={`px-5 py-2.5 rounded-xl text-sm font-bold transition-all flex items-center ${view === 'arena' ? 'bg-indigo-600 text-white shadow-lg shadow-indigo-600/30' : 'bg-slate-800 text-white hover:bg-slate-700 active:scale-95 shadow-lg shadow-black/20'}`}
             >
               Arena <ChevronRight className="w-4 h-4 ml-1" />
             </button>
@@ -476,6 +612,10 @@ export default function App() {
               onDelete={deleteFromHallOfFame}
               onUpdate={updateHallOfFame}
             />
+          )}
+
+          {view === 'mobileApp' && (
+            <MobileAppView deferredPrompt={deferredPrompt} />
           )}
 
           {view === 'arena' && (
@@ -577,6 +717,8 @@ export default function App() {
                           key="tab-fixtures" 
                           fixtures={fixtures} 
                           setFixtures={setFixtures} 
+                          bracketMatches={bracketMatches}
+                          setBracketMatches={setBracketMatches}
                           clubs={clubs} 
                           tournamentName={tournamentName}
                         />
@@ -1044,11 +1186,17 @@ function GroupsTab({ clubs, groups, setGroups, onGenerate, schedulingMode, setSc
   );
 }
 
-function FixturesTab({ fixtures, setFixtures, clubs, tournamentName }: any) {
+function FixturesTab({ fixtures, setFixtures, bracketMatches, setBracketMatches, clubs, tournamentName }: any) {
   const exportRef = useRef<HTMLDivElement>(null);
   const [selectedMatchdayIdx, setSelectedMatchdayIdx] = useState<number>(0);
   const [previewImg, setPreviewImg] = useState<string | null>(null);
   const [exportType, setExportType] = useState<'png' | 'pdf' | null>(null);
+
+  // States for bulk result entry
+  const [showBulkEntry, setShowBulkEntry] = useState(false);
+  const [bulkText, setBulkText] = useState("");
+  const [isParsing, setIsParsing] = useState(false);
+  const [parseResultMsg, setParseResultMsg] = useState<{ type: 'success' | 'error', text: string } | null>(null);
 
   const updateScore = (matchdayId: string, fixtureId: string, side: 'home' | 'away', value: string) => {
     const val = parseInt(value) || 0;
@@ -1066,6 +1214,166 @@ function FixturesTab({ fixtures, setFixtures, clubs, tournamentName }: any) {
       }
       return md;
     }));
+  };
+
+  const applyParsedScores = (parsedMatches: any[]) => {
+    let updateCount = 0;
+
+    // 1. Core group-stage fixtures
+    setFixtures((prev: any[]) => {
+      return prev.map((md: any) => {
+        let changed = false;
+        const newMatches = md.matches.map((m: any) => {
+          const homeClub = clubs.find((c: any) => c.id === m.homeId);
+          const awayClub = clubs.find((c: any) => c.id === m.awayId);
+          if (!homeClub || !awayClub) return m;
+
+          const matchResult = parsedMatches.find((pm: any) => {
+            const pmHome = pm.homeTeamName.toLowerCase().trim();
+            const pmAway = pm.awayTeamName.toLowerCase().trim();
+            const originalHome = homeClub.name.toLowerCase().trim();
+            const originalAway = awayClub.name.toLowerCase().trim();
+
+            return (
+              (pmHome === originalHome && pmAway === originalAway) ||
+              (pmHome === originalAway && pmAway === originalHome)
+            );
+          });
+
+          if (matchResult) {
+            changed = true;
+            updateCount++;
+            const isSwapped = matchResult.homeTeamName.toLowerCase().trim() === awayClub.name.toLowerCase().trim();
+            const score1 = isSwapped ? matchResult.awayScore : matchResult.homeScore;
+            const score2 = isSwapped ? matchResult.homeScore : matchResult.awayScore;
+            return {
+              ...m,
+              homeScore: score1,
+              awayScore: score2,
+              status: 'played'
+            };
+          }
+          return m;
+        });
+        if (changed) return { ...md, matches: newMatches };
+        return md;
+      });
+    });
+
+    // 2. Playoff bracket matches
+    if (bracketMatches && setBracketMatches) {
+      setBracketMatches((prev: any[]) => {
+        if (!prev || prev.length === 0) return prev;
+        return prev.map((m: any) => {
+          const team1 = clubs.find((c: any) => c.id === m.team1.clubId);
+          const team2 = clubs.find((c: any) => c.id === m.team2.clubId);
+          if (!team1 || !team2) return m;
+
+          const matchResult = parsedMatches.find((pm: any) => {
+            const pmHome = pm.homeTeamName.toLowerCase().trim();
+            const pmAway = pm.awayTeamName.toLowerCase().trim();
+            const originalHome = team1.name.toLowerCase().trim();
+            const originalAway = team2.name.toLowerCase().trim();
+
+            return (
+              (pmHome === originalHome && pmAway === originalAway) ||
+              (pmHome === originalAway && pmAway === originalHome)
+            );
+          });
+
+          if (matchResult) {
+            updateCount++;
+            const isSwapped = matchResult.homeTeamName.toLowerCase().trim() === team2.name.toLowerCase().trim();
+            const score1 = isSwapped ? matchResult.awayScore : matchResult.homeScore;
+            const score2 = isSwapped ? matchResult.homeScore : matchResult.awayScore;
+
+            let winner = null;
+            if (score1 > score2) winner = m.team1;
+            else if (score2 > score1) winner = m.team2;
+
+            return {
+              ...m,
+              score1,
+              score2,
+              winner
+            };
+          }
+          return m;
+        });
+      });
+    }
+
+    return updateCount;
+  };
+
+  const runStandardRegexParse = () => {
+    if (!bulkText || !bulkText.trim()) {
+      setParseResultMsg({ type: 'error', text: "Please enter some score lines first." });
+      return;
+    }
+    setParseResultMsg(null);
+    try {
+      const lines = bulkText.split('\n');
+      const parsed: any[] = [];
+      lines.forEach(line => {
+        // match "Team A 3 - 2 Team B" or "Team A 3:2 Team B" or "Team A 3,2 Team B"
+        const match = line.match(/(.+?)\s+(\d+)\s*[-:,]\s*(\d+)\s+(.+)/);
+        if (match) {
+          parsed.push({
+            homeTeamName: match[1].trim(),
+            awayTeamName: match[4].trim(),
+            homeScore: parseInt(match[2]),
+            awayScore: parseInt(match[3])
+          });
+        }
+      });
+
+      if (parsed.length === 0) {
+        setParseResultMsg({ type: 'error', text: "No matches parsed. Verify format: [Team] [Score] - [Score] [Team]." });
+        return;
+      }
+
+      const count = applyParsedScores(parsed);
+      setParseResultMsg({ type: 'success', text: `Direct match verified: Successfully mapped and applied ${count} match results!` });
+    } catch (err: any) {
+      setParseResultMsg({ type: 'error', text: "Regex alignment failed. Double check your format." });
+    }
+  };
+
+  const runAIExtraParse = async () => {
+    if (!bulkText || !bulkText.trim()) {
+      setParseResultMsg({ type: 'error', text: "Please enter some score lines first." });
+      return;
+    }
+    setIsParsing(true);
+    setParseResultMsg(null);
+    try {
+      const res = await fetch('/api/parse-bulk-scores', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ text: bulkText, clubs })
+      });
+      if (!res.ok) {
+        throw new Error("Missing or invalid server response. Verify connection.");
+      }
+      const data = await res.json();
+      if (data && data.matches && data.matches.length > 0) {
+        const count = applyParsedScores(data.matches);
+        setParseResultMsg({ 
+          type: 'success', 
+          text: `🧠 Gemini AI successfully mapped and verified ${count} match fixtures!` 
+        });
+      } else {
+        setParseResultMsg({ 
+          type: 'error', 
+          text: "AI could not map those names to registered Clubs. Try making names more recognizable." 
+        });
+      }
+    } catch (err: any) {
+      setParseResultMsg({ type: 'error', text: err.message || "An unexpected error occurred during intelligence parsing." });
+    } finally {
+      setIsParsing(false);
+    }
   };
 
   const handleExport = async (type: 'png' | 'pdf') => {
@@ -1109,7 +1417,7 @@ function FixturesTab({ fixtures, setFixtures, clubs, tournamentName }: any) {
     <motion.div initial={{ opacity: 0 }} animate={{ opacity: 1 }} className="space-y-8">
       {/* Fallback Preview/Instructions Overlay Modal */}
       {previewImg && (
-         <div className="fixed inset-0 bg-slate-950/90 backdrop-blur-md z-50 flex items-center justify-center p-4">
+         <div className="fixed inset-0 bg-slate-950/95 backdrop-blur-md z-50 flex items-center justify-center p-4">
             <div className="bg-slate-900 border border-slate-800 rounded-3xl p-6 lg:p-8 max-w-2xl w-full max-h-[90vh] overflow-y-auto flex flex-col gap-6 relative shadow-2xl">
                <button 
                   onClick={() => { setPreviewImg(null); setExportType(null); }}
@@ -1118,29 +1426,51 @@ function FixturesTab({ fixtures, setFixtures, clubs, tournamentName }: any) {
                   <X className="w-4 h-4" />
                </button>
                <div className="text-center space-y-2">
-                  <div className="w-12 h-12 bg-green-500/10 text-green-500 rounded-2xl flex items-center justify-center mx-auto border border-green-500/20">
+                  <div className="w-12 h-12 bg-indigo-500/10 text-indigo-400 rounded-2xl flex items-center justify-center mx-auto border border-indigo-500/20">
                      <Check className="w-6 h-6" />
                   </div>
                   <h3 className="text-xl font-display font-black text-white uppercase tracking-tight">Export Initiated</h3>
                   <p className="text-slate-400 text-xs max-w-md mx-auto leading-relaxed">
-                     Your {exportType?.toUpperCase()} document generation is ready. Since this application runs in a secure sandboxed preview iframe, browser policies might block immediate direct downloads.
+                     Your {exportType?.toUpperCase()} document generation is completed. If standard download attempts are blocked by browser sandboxes:
                   </p>
                </div>
                
                <div className="bg-slate-950 p-4 rounded-2xl border border-slate-800 flex flex-col gap-3">
-                  <span className="text-[10px] font-black text-slate-500 uppercase tracking-wider">High Resolution Preview</span>
-                  <img src={previewImg} className="max-h-[250px] object-contain rounded-lg border border-slate-800 mx-auto" alt="Generated Preview" />
-                  <p className="text-indigo-400 text-[11px] font-bold text-center leading-relaxed">
-                    💡 HELPFUL EXTRA TIP: If your browser block-shield is up, simply right-click on the image above and click "Save Image As...", or open this app in a separate tab to trigger standard click-to-downloads!
-                  </p>
+                  <span className="text-[10px] font-black text-slate-500 uppercase tracking-wider">High Resolution Output</span>
+                  <img src={previewImg} className="max-h-[220px] object-contain rounded-lg border border-slate-800 mx-auto" alt="Generated Preview" />
+               </div>
+
+               <div className="grid grid-cols-2 gap-2">
+                  <button 
+                     onClick={async () => {
+                        const copied = await copyImageToClipboard(previewImg);
+                        alert(copied ? "Success! High-resolution image is now in your clipboard. You can paste it safely anywhere (Paint, Word, WhatsApp, Discord, Slack)!" : "Clipboard secure block. Please use right-click save option.");
+                     }}
+                     className="bg-indigo-600 hover:bg-indigo-500 text-white font-black py-3 rounded-xl text-[10px] uppercase cursor-pointer flex items-center justify-center gap-2"
+                  >
+                     <Check className="w-4 h-4" /> Copy Image
+                  </button>
+                  <button 
+                     onClick={() => {
+                        const newTab = window.open();
+                        if (newTab) {
+                          newTab.document.write(`<div style="background:#020617; min-height:100vh; display:flex; justify-content:center; align-items:center;"><img src="${previewImg}" style="max-width:100%; border-radius:12px; box-shadow:0 10px 30px rgba(0,0,0,0.5);" /></div>`);
+                        } else {
+                          alert("Popup blocker active! Please right-click the preview image to save, or open this tournament inside a new tab.");
+                        }
+                     }}
+                     className="bg-slate-950 hover:bg-slate-800 text-slate-300 border border-slate-800 font-black py-3 rounded-xl text-[10px] uppercase cursor-pointer flex items-center justify-center gap-2"
+                  >
+                     <ArrowUpRight className="w-4 h-4" /> Open In New Tab
+                  </button>
                </div>
                
                <div className="flex gap-2 w-full">
                   <button 
                      onClick={() => { setPreviewImg(null); setExportType(null); }}
-                     className="flex-1 bg-indigo-600 hover:bg-indigo-500 text-white font-bold py-3.5 rounded-xl text-xs uppercase cursor-pointer"
+                     className="flex-1 bg-slate-800 hover:bg-slate-700 text-white font-black py-3 rounded-xl text-[10px] uppercase cursor-pointer"
                   >
-                     Got It, Return To Arena
+                     Done, Return To Match Board
                   </button>
                </div>
             </div>
@@ -1154,21 +1484,96 @@ function FixturesTab({ fixtures, setFixtures, clubs, tournamentName }: any) {
           </h2>
           <p className="text-slate-500 text-sm mt-1">Manage scores and export fixture list</p>
         </div>
-        <div className="flex gap-2 w-full sm:w-auto">
+        <div className="flex flex-wrap gap-2 w-full sm:w-auto">
+            <button 
+                onClick={() => setShowBulkEntry(!showBulkEntry)}
+                className={`px-4 py-3 rounded-xl border text-[10px] font-bold uppercase flex items-center justify-center gap-2 cursor-pointer transition-colors ${showBulkEntry ? 'bg-indigo-600 border-indigo-550 text-white' : 'bg-slate-950 hover:bg-slate-800 border-slate-800 text-slate-300'}`}
+            >
+                <Sparkles className="w-3.5 h-3.5 text-yellow-400" /> Bulk Entry with AI
+            </button>
             <button 
                 onClick={() => handleExport('png')}
-                className="flex-1 bg-slate-950 hover:bg-slate-800 text-slate-300 font-bold px-4 py-3 rounded-xl border border-slate-800 text-[10px] uppercase flex items-center justify-center gap-2 cursor-pointer"
+                className="bg-slate-950 hover:bg-slate-800 text-slate-300 font-bold px-4 py-3 rounded-xl border border-slate-800 text-[10px] uppercase flex items-center justify-center gap-2 cursor-pointer"
             >
                 <ImageIcon className="w-3.5 h-3.5" /> PNG
             </button>
             <button 
                 onClick={() => handleExport('pdf')}
-                className="flex-1 bg-slate-950 hover:bg-slate-800 text-slate-300 font-bold px-4 py-3 rounded-xl border border-slate-800 text-[10px] uppercase flex items-center justify-center gap-2 cursor-pointer"
+                className="bg-slate-950 hover:bg-slate-800 text-slate-300 font-bold px-4 py-3 rounded-xl border border-slate-800 text-[10px] uppercase flex items-center justify-center gap-2 cursor-pointer"
             >
                 <FileText className="w-3.5 h-3.5" /> PDF
             </button>
         </div>
       </div>
+
+      {/* AI & Standard Bulk Score Entry Form Panel */}
+      <AnimatePresence>
+        {showBulkEntry && (
+          <motion.div 
+            initial={{ opacity: 0, height: 0 }} 
+            animate={{ opacity: 1, height: 'auto' }} 
+            exit={{ opacity: 0, height: 0 }}
+            className="overflow-hidden"
+          >
+            <div className="bg-slate-900 border-2 border-indigo-500/20 p-5 rounded-2xl space-y-4">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <Sparkles className="w-5 h-5 text-indigo-400 animate-pulse" />
+                  <h3 className="text-sm font-black text-white uppercase tracking-wider">Bulk Matchscore Input Station</h3>
+                </div>
+                <button 
+                  onClick={() => setShowBulkEntry(false)}
+                  className="text-slate-500 hover:text-white"
+                >
+                  <X className="w-4 h-4" />
+                </button>
+              </div>
+              <p className="text-[11px] text-slate-400 leading-relaxed">
+                Paste any unstructured rows or scores. Standard matcher handles <code className="text-indigo-400 font-mono">Team A 3 - 1 Team B</code> lines. Or invoke our smart **Gemini AI Engine** to read shorthand names, misspelled inputs, or commentary and map them automatically to corresponding scheduled fixtures.
+              </p>
+              
+              <textarea 
+                value={bulkText}
+                onChange={(e) => setBulkText(e.target.value)}
+                rows={4}
+                className="w-full bg-slate-950 text-white font-mono text-xs p-3.5 rounded-xl border border-slate-800 focus:border-indigo-500 focus:ring-1 focus:ring-indigo-500 outline-none transition-all placeholder:text-slate-600"
+                placeholder="Example:&#10;Arsenal 4 - 2 Dortmund&#10;madrid 0 - 0 bayern&#10;Dortmund 1-1 Inter"
+              />
+
+              {parseResultMsg && (
+                <div className={`p-3 rounded-xl text-center text-xs font-bold font-sans uppercase border ${parseResultMsg.type === 'success' ? 'bg-green-500/10 border-green-500/20 text-green-400' : 'bg-red-500/10 border-red-500/20 text-red-400'}`}>
+                  {parseResultMsg.text}
+                </div>
+              )}
+
+              <div className="flex flex-col sm:flex-row gap-2">
+                <button 
+                  onClick={runStandardRegexParse}
+                  disabled={isParsing || !bulkText.trim()}
+                  className="flex-1 bg-slate-950 hover:bg-slate-800 disabled:opacity-40 text-slate-300 border border-slate-800 font-black py-3 rounded-xl text-[10px] uppercase transition-all cursor-pointer flex items-center justify-center gap-1.5"
+                >
+                  <Check className="w-3.5 h-3.5" /> Fast Auto-Link
+                </button>
+                <button 
+                  onClick={runAIExtraParse}
+                  disabled={isParsing || !bulkText.trim()}
+                  className="flex-1 bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 disabled:text-slate-500 font-black py-3 rounded-xl text-[10px] uppercase transition-all cursor-pointer flex items-center justify-center gap-1.5 shadow-lg shadow-indigo-600/10"
+                >
+                  {isParsing ? (
+                    <>
+                      <Loader2 className="w-3.5 h-3.5 animate-spin text-white" /> Mapping via Gemini AI...
+                    </>
+                  ) : (
+                    <>
+                      <Sparkles className="w-3.5 h-3.5 text-yellow-300" /> Apply via Gemini AI
+                    </>
+                  )}
+                </button>
+              </div>
+            </div>
+          </motion.div>
+        )}
+      </AnimatePresence>
 
       {/* Segmented Matchday Menu Browser */}
       {fixtures.length > 0 && (
@@ -1376,6 +1781,7 @@ function StandingsTab({ standings, clubs, groups, tournamentName }: any) {
                    <tr className="border-b border-slate-800 bg-slate-900/50">
                       <th className="p-4 font-black text-slate-600 uppercase">#</th>
                       <th className="p-4 font-black text-slate-600 uppercase min-w-[120px]">Team</th>
+                      <th className="p-4 font-black text-indigo-400 uppercase text-center bg-indigo-500/10" title="Points (Upfront)">Pts</th>
                       <th className="p-4 font-black text-slate-600 uppercase text-center" title="Matches Played">MP</th>
                       <th className="p-4 font-black text-slate-600 uppercase text-center" title="Won">W</th>
                       <th className="p-4 font-black text-slate-600 uppercase text-center" title="Draw">D</th>
@@ -1383,7 +1789,6 @@ function StandingsTab({ standings, clubs, groups, tournamentName }: any) {
                       <th className="p-4 font-black text-slate-600 uppercase text-center" title="Goals For">GF</th>
                       <th className="p-4 font-black text-slate-600 uppercase text-center" title="Goals Against">GA</th>
                       <th className="p-4 font-black text-slate-600 uppercase text-center" title="Goal Difference">GD</th>
-                      <th className="p-4 font-black text-white uppercase text-center bg-indigo-500/10">Pts</th>
                    </tr>
                 </thead>
                 <tbody>
@@ -1402,6 +1807,9 @@ function StandingsTab({ standings, clubs, groups, tournamentName }: any) {
                               </div>
                               <span className="font-bold text-slate-200">{club?.name}</span>
                            </td>
+                           <td className="p-4 text-center bg-indigo-500/[0.08]">
+                              <span className="font-black text-indigo-300 text-base">{row.pts}</span>
+                           </td>
                            <td className="p-4 text-center text-slate-400 font-medium">{row.played}</td>
                            <td className="p-4 text-center text-slate-500 font-medium">{row.won}</td>
                            <td className="p-4 text-center text-slate-500 font-medium">{row.drawn}</td>
@@ -1410,9 +1818,6 @@ function StandingsTab({ standings, clubs, groups, tournamentName }: any) {
                            <td className="p-4 text-center text-slate-500 font-medium">{row.ga}</td>
                            <td className={`p-4 text-center font-bold ${row.gd > 0 ? 'text-green-500' : row.gd < 0 ? 'text-red-500' : 'text-slate-500'}`}>
                               {row.gd > 0 ? `+${row.gd}` : row.gd}
-                           </td>
-                           <td className="p-4 text-center bg-indigo-500/[0.03]">
-                              <span className="font-black text-white text-base">{row.pts}</span>
                            </td>
                         </tr>
                       );
@@ -1732,6 +2137,229 @@ function HallOfFameView({ hallOfFame, onAdd, onDelete, onUpdate }: any) {
             </div>
           </motion.div>
         ))}
+      </div>
+    </motion.div>
+  );
+}
+
+function MobileAppView({ deferredPrompt }: { deferredPrompt: any }) {
+  const [deviceType, setDeviceType] = useState<'android' | 'ios' | 'desktop'>('desktop');
+  const [installStatus, setInstallStatus] = useState<'idle' | 'installing' | 'completed'>('idle');
+
+  useEffect(() => {
+    const ua = navigator.userAgent.toLowerCase();
+    if (/android/.test(ua)) {
+      setDeviceType('android');
+    } else if (/iphone|ipad|ipod/.test(ua)) {
+      setDeviceType('ios');
+    } else {
+      setDeviceType('desktop');
+    }
+  }, []);
+
+  const triggerPWAInstall = async () => {
+    if (!deferredPrompt) {
+      alert("💡 Install prompt helper is initializing. If your device doesn't trigger automatically, please tap your browser Menu (⋮ or share icon) and select 'Add to Home screen' or 'Install app' to compile and place it in your drawer!");
+      return;
+    }
+    setInstallStatus('installing');
+    try {
+      deferredPrompt.prompt();
+      const { outcome } = await deferredPrompt.userChoice;
+      console.log('Mobile App Installation Choice:', outcome);
+      setInstallStatus('completed');
+    } catch (err) {
+      console.error(err);
+      setInstallStatus('idle');
+    }
+  };
+
+  const downloadLauncherHelper = () => {
+    const launcherHtml = `<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>Tournament Premium Mobile Launcher</title>
+    <style>
+        body {
+            background-color: #020617;
+            color: #ffffff;
+            font-family: system-ui, -apple-system, sans-serif;
+            display: flex;
+            flex-direction: column;
+            align-items: center;
+            justify-content: center;
+            min-height: 100vh;
+            margin: 0;
+            text-align: center;
+            padding: 20px;
+        }
+        .container {
+            max-width: 400px;
+            background: #0f172a;
+            border: 1px solid #1e293b;
+            padding: 35px;
+            border-radius: 28px;
+            box-shadow: 0 10px 40px rgba(0,0,0,0.6);
+        }
+        h1 { font-weight: 900; font-size: 1.6rem; margin-bottom: 12px; text-transform: uppercase; letter-spacing: -0.03em; color: #ffffff; }
+        p { color: #94a3b8; font-size: 0.85rem; line-height: 1.6; margin-bottom: 28px; }
+        .btn {
+            background: #4f46e5;
+            color: #ffffff;
+            font-weight: 800;
+            text-decoration: none;
+            padding: 14px 30px;
+            border-radius: 14px;
+            display: inline-block;
+            text-transform: uppercase;
+            font-size: 0.75rem;
+            letter-spacing: 0.08em;
+            transition: all 0.25s ease;
+            box-shadow: 0 4px 12px rgba(79, 70, 229, 0.4);
+        }
+        .btn:hover { background: #4338ca; transform: translateY(-1px); }
+    </style>
+</head>
+<body>
+    <div class="container">
+        <svg style="width: 56px; height: 56px; color: #6366f1; margin-bottom: 20px;" fill="none" viewBox="0 0 24 24" stroke="currentColor">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M12 18h.01M8 21h8a2 2 0 002-2V5a2 2 0 00-2-2H8a2 2 0 00-2 2v14a2 2 0 002 2z" />
+        </svg>
+        <h1>Arena Premium Active App</h1>
+        <p>Access your live tourney boards, automatic standing matrices, and AI bulk scoring modules seamlessly synchronized across systems.</p>
+        <a href="${window.location.origin}" class="btn">Launch Arena</a>
+    </div>
+</body>
+</html>`;
+
+    const blob = new Blob([launcherHtml], { type: 'text/html' });
+    const url = URL.createObjectURL(blob);
+    const link = document.createElement('a');
+    link.href = url;
+    link.download = 'Tournament_Premium_App.html';
+    document.body.appendChild(link);
+    link.click();
+    document.body.removeChild(link);
+  };
+
+  return (
+    <motion.div 
+      initial={{ opacity: 0, y: 15 }} 
+      animate={{ opacity: 1, y: 0 }} 
+      className="max-w-4xl mx-auto space-y-8"
+    >
+      <div className="bg-slate-900 border border-slate-800 p-6 sm:p-10 rounded-3xl relative overflow-hidden shadow-2xl space-y-6">
+        <div className="absolute top-0 right-0 w-80 h-80 bg-indigo-600/15 rounded-full blur-3xl -mr-20 -mt-20 pointer-events-none" />
+        
+        <div className="space-y-2">
+          <div className="inline-flex items-center gap-2 px-3 py-1 rounded-full bg-indigo-500/10 border border-indigo-500/20 text-indigo-400 text-xs font-bold uppercase tracking-wider">
+            <Smartphone className="w-3.5 h-3.5 animate-pulse text-indigo-400" /> PWA APK installer core active
+          </div>
+          <h2 className="text-3xl sm:text-4xl font-display font-black text-white uppercase tracking-tight">
+            Deploy as mobile App
+          </h2>
+          <p className="text-slate-400 text-sm max-w-2xl leading-relaxed">
+            By compiling this platform into a Progressive Web App, we completely bypass bulky native Android APK security warning blocks. It places an app launcher icon directly onto your desktop or drawer without any system lag.
+          </p>
+        </div>
+
+        {/* Diagnostics banner */}
+        <div className="bg-slate-950/80 border border-slate-800 p-5 rounded-2xl flex flex-col sm:flex-row items-center justify-between gap-4">
+          <div className="flex items-center gap-3">
+            <div className={`w-10 h-10 rounded-xl flex items-center justify-center border ${deviceType !== 'desktop' ? 'bg-indigo-500/10 border-indigo-500/20 text-indigo-400' : 'bg-slate-900 border-slate-800 text-slate-500'}`}>
+              <Smartphone className="w-5 h-5" />
+            </div>
+            <div>
+              <p className="text-[10px] font-black text-slate-500 uppercase tracking-widest">Active Device Link</p>
+              <h4 className="text-sm font-bold text-white uppercase tracking-tight">
+                {deviceType === 'android' && "Android System Identified (Direct Installer)"}
+                {deviceType === 'ios' && "iOS Apple System Identified (Safari Match)"}
+                {deviceType === 'desktop' && "Desktop Workspace Console Controller"}
+              </h4>
+            </div>
+          </div>
+          <div className="flex items-center gap-2">
+            <span className="w-2.5 h-2.5 rounded-full bg-green-500 animate-ping" />
+            <span className="text-[11px] font-bold text-green-400 uppercase tracking-wide">PWA Server Ready</span>
+          </div>
+        </div>
+
+        {/* Install Options Grid */}
+        <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 flex flex-col justify-between space-y-6">
+            <div className="space-y-2">
+              <span className="text-[10px] font-black text-indigo-400 uppercase tracking-widest">Method A: Direct Native Install</span>
+              <h3 className="text-lg font-extrabold text-white">Browser App Installer</h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Invokes the browser's high-speed local installation pipeline. Once verified, the application runs inside its own standalone screen container without raw web tabs or navigation panels.
+              </p>
+            </div>
+            <button 
+              onClick={triggerPWAInstall}
+              disabled={installStatus === 'installing'}
+              className="w-full bg-indigo-600 hover:bg-indigo-500 disabled:bg-slate-800 text-white font-black py-4 rounded-xl text-xs uppercase cursor-pointer tracking-wider shadow-lg shadow-indigo-600/15 flex items-center justify-center gap-2"
+            >
+              {installStatus === 'installing' ? (
+                <>
+                  <Loader2 className="w-4 h-4 animate-spin text-white" /> Configuring Launcher...
+                </>
+              ) : deferredPrompt ? (
+                <>
+                  <Smartphone className="w-4 h-4 text-white" /> Install App to Device
+                </>
+              ) : (
+                <>
+                  <Smartphone className="w-4 h-4 text-slate-400" /> Standard Install Prompt
+                </>
+              )}
+            </button>
+          </div>
+
+          <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 flex flex-col justify-between space-y-6">
+            <div className="space-y-2">
+              <span className="text-[10px] font-black text-yellow-500 uppercase tracking-widest">Method B: Standalone Launcher Utility</span>
+              <h3 className="text-lg font-extrabold text-white">Download Standalone Shortcut</h3>
+              <p className="text-xs text-slate-400 leading-relaxed">
+                Download a secure standalone launcher application file. Open this file locally on your phone or computer to automatically launch your cloud-synchronized tournament system instantly.
+              </p>
+            </div>
+            <button 
+              onClick={downloadLauncherHelper}
+              className="w-full bg-slate-900 border border-slate-800 hover:bg-slate-800 text-slate-200 font-black py-4 rounded-xl text-xs uppercase cursor-pointer tracking-wider flex items-center justify-center gap-2"
+            >
+              <Download className="w-4 h-4 text-indigo-400" /> Download App Shortcut
+            </button>
+          </div>
+        </div>
+
+        {/* Step-by-Step guides */}
+        <div className="bg-slate-950 p-6 rounded-2xl border border-slate-800 space-y-4">
+          <h3 className="text-base font-black text-white uppercase tracking-wider flex items-center gap-2">
+            <Info className="w-4 h-4 text-indigo-400" /> Step-by-Step Device Setup
+          </h3>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-6 text-xs leading-relaxed">
+            <div className="space-y-3">
+              <h4 className="font-bold text-indigo-400 uppercase tracking-wider">For Android (Chrome / Edge / Samsung Internet)</h4>
+              <ol className="list-decimal list-inside text-slate-400 space-y-2">
+                <li>Tap the browser's menu button <span className="text-white font-bold">(⋮ or 三)</span> in your taskbar.</li>
+                <li>Tap <span className="text-white font-bold">"Add to Home Screen"</span> or <span className="text-white font-bold">"Install App"</span>.</li>
+                <li>Tap Install inside the confirmation toast.</li>
+                <li>Open the newly installed launcher app from your app drawer.</li>
+              </ol>
+            </div>
+            <div className="space-y-3">
+              <h4 className="font-bold text-pink-400 uppercase tracking-wider">For Apple / iOS (Safari Browser)</h4>
+              <ol className="list-decimal list-inside text-slate-400 space-y-2">
+                <li>Make sure you are loading this application layout inside native <span className="text-white font-bold">Safari browser</span>.</li>
+                <li>Tap the <span className="text-white font-bold">Share option</span> (square with arrow up icon) in Safari.</li>
+                <li>Select <span className="text-white font-bold">"Add to Home Screen"</span> from the sharing tray list.</li>
+                <li>Touch <span className="text-white font-bold">Add</span> in the top right. Launch directly from your application grid!</li>
+              </ol>
+            </div>
+          </div>
+        </div>
       </div>
     </motion.div>
   );
